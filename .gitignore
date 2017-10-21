@@ -1,0 +1,8 @@
+CodeDB
+Debug/
+Release/
+Src/Backup
+Inc/Backup
+.mxproject
+.vs
+VisualGDBCache
