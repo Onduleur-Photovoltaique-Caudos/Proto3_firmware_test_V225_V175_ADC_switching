@@ -116,13 +116,13 @@ void MX_HRTIM1_Init(void)
     _Error_Handler(__FILE__, __LINE__);
   }
 
-  pCompareCfg.CompareValue = 8192;
+  pCompareCfg.CompareValue = 6192;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);
   }
 
-  pCompareCfg.CompareValue = 13192;
+  pCompareCfg.CompareValue = 8192;
   if (HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_E, HRTIM_COMPAREUNIT_1, &pCompareCfg) != HAL_OK)
   {
     _Error_Handler(__FILE__, __LINE__);

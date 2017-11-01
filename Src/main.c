@@ -37,6 +37,7 @@
   */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "math.h"
 #include "stm32f3xx_hal.h"
 #include "adc.h"
 #include "crc.h"
@@ -107,18 +108,76 @@ void doLed()
 	HAL_GPIO_WritePin(Led_GPIO_Port, Led_Pin, GPIO_PIN_SET); 
 }
 
+
+#define period  16364
+static unsigned short compare_225 = period / 2;
+static unsigned short compare_175 = period / 2;
+
+void adjust_225_175()
+{
+	if (fabs(fM_VIN) < 10){
+		return; // low voltage at input
+	}
+	float target_175 = fM_VIN * 0.45;
+	float target_225 = fM_VIN * 0.55;
+	
+	float diff_175 = (fM_V175 - target_175) / fM_VIN;
+	float diff_225 = (fM_V225 - target_225) / fM_VIN;
+	
+
+	HRTIM_CompareCfgTypeDef compareCfg;
+
+
+	// 225 Timer E1 -> PC8  C_225 -> P1 -> U1(2) -> P23(1) -> Q1 L1 Q3 D3 
+	compareCfg.CompareValue = compare_225 + diff_225 * period / 256;
+
+	if (compareCfg.CompareValue < 70) {
+		compareCfg.CompareValue = 70;
+	}
+	if (compareCfg.CompareValue >= period - 70) {
+		compareCfg.CompareValue = period - 70;
+	}
+	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
+		HRTIM_TIMERINDEX_TIMER_E,
+		HRTIM_COMPAREUNIT_1,
+		&compareCfg);
+	compare_225 = compareCfg.CompareValue; // remember previous value;
+
+		// 175 Timer C1 -> PB12 C_175  -> P2 -> U1(1) -> P24(1) -> Q2 L2 Q4 D4 
+		if (compare_175 < 100 && diff_175 >0){
+			diff_175 /=4;
+		}
+	compareCfg.CompareValue = compare_175 - diff_175 * period / 128;
+
+	if (compareCfg.CompareValue < 50) {
+		compareCfg.CompareValue = 50;
+	}
+	if (compareCfg.CompareValue >= period -50) {
+		compareCfg.CompareValue = period -50;
+	}
+	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
+		HRTIM_TIMERINDEX_TIMER_C,
+		HRTIM_COMPAREUNIT_1,
+		&compareCfg);
+	compare_175 = compareCfg.CompareValue; // remember previous value;
+	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
+		HRTIM_TIMERINDEX_TIMER_C,
+		HRTIM_COMPAREUNIT_1,
+		&compareCfg);
+}
+
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* adcHandle)
 {// end of DMA
 	if (adcHandle == &hadc2){
 		g_MeasurementNumber++;
 		fM_VIN = g_ADCBuffer1[0] *mvFactor1;
-		fM_V225 = g_ADCBuffer1[1] *mvFactor2;
+		fM_V175 = g_ADCBuffer1[1] *mvFactor2;
 		fM_IHFL = g_ADCBuffer1[2] *iFactor;
 		fM_VOUT1 = g_ADCBuffer1[3] *mvFactor1;
 		fM_VOUT2 = g_ADCBuffer1[4] *mvFactor1;
 		fM_Temp = g_ADCBuffer1[5] *1; 
 		// ADC2
-		fM_V175 = g_ADCBuffer2[0] *mvFactor2;
+		fM_V225 = g_ADCBuffer2[0] *mvFactor2;
 		fM_IOUT = g_ADCBuffer2[1] *mvFactor1; 
 		fM_IH1 = g_ADCBuffer2[2] *iFactor; 
 		fM_IH2 = g_ADCBuffer2[3] *iFactor;
@@ -127,6 +186,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* adcHandle)
 		fM_I225 = g_ADCBuffer2[6] *iFactor; 
 
 	}
+	adjust_225_175();
 }
 
 void doPin(GPIO_TypeDef* port, uint16_t pin)
@@ -140,41 +200,6 @@ void doPin(GPIO_TypeDef* port, uint16_t pin)
 	delay_us_DWT(100);
 	HAL_GPIO_WritePin(port, pin, GPIO_PIN_RESET);
 	delay_us_DWT(100);
-}
-
-void adjust_225_175(){
-	float target_225 = fM_VIN * 0.45;
-	float target_175 = fM_VIN * 0.55;
-
-	float diff_225 = (fM_V225 - target_225) / fM_VIN;
-	float diff_175 = (fM_V175 - target_175) / fM_VIN;
-
-#define period  16364
-	static unsigned short compare_225 = period/2;
-	static unsigned short compare_175 = period/2;
-
-	HRTIM_CompareCfgTypeDef compareCfg;
-
-	if (fM_VIN < 1000.0) {
-		return; // low voltage at input
-	}
-	// 225
-	compareCfg.CompareValue = compare_225 - diff_225 * period / 4;
-
-	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
-		HRTIM_TIMERINDEX_TIMER_E,
-		HRTIM_COMPAREUNIT_1,
-		&compareCfg);
-	compare_225 = compareCfg.CompareValue; // remember previous value;
-
-		// 175
-	compareCfg.CompareValue = compare_175 - diff_175 * period / 4;
-
-	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
-		HRTIM_TIMERINDEX_TIMER_C,
-		HRTIM_COMPAREUNIT_1,
-		&compareCfg);
-	compare_175 = compareCfg.CompareValue; // remember previous value;
 }
 
 /* USER CODE END 0 */
@@ -243,7 +268,7 @@ int main(void)
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
-	  adjust_225_175();
+	  //adjust_225_175();
 	  HAL_Delay(1);
   }
   /* USER CODE END 3 */
