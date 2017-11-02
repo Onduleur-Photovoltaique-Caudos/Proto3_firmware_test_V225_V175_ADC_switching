@@ -37,7 +37,6 @@
   */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "math.h"
 #include "stm32f3xx_hal.h"
 #include "adc.h"
 #include "crc.h"
@@ -48,7 +47,7 @@
 #include "gpio.h"
 
 /* USER CODE BEGIN Includes */
-
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
@@ -102,6 +101,19 @@ float fM_V175, fM_IOUT, fM_IH1, fM_IH2, fM_IIN, fM_I175, fM_I225;
 int g_MeasurementNumber = 0;
 int g_DMACount = 0;
 
+void doSyncOn(){
+	HAL_GPIO_WritePin(Sync_GPIO_Port, Sync_Pin, GPIO_PIN_SET); 
+}
+void doSyncOff()
+{
+	HAL_GPIO_WritePin(Sync_GPIO_Port, Sync_Pin, GPIO_PIN_RESET); 
+}
+void doLedOn(){
+	HAL_GPIO_WritePin(Led_GPIO_Port, Led_Pin, GPIO_PIN_SET); 
+}
+void doLedOff(){
+	HAL_GPIO_WritePin(Led_GPIO_Port, Led_Pin, GPIO_PIN_RESET); 
+}
 void doLed()
 {
 	HAL_GPIO_WritePin(Led_GPIO_Port, Led_Pin, GPIO_PIN_SET); 
@@ -113,57 +125,103 @@ void doLed()
 static unsigned short compare_225 = period / 2;
 static unsigned short compare_175 = period / 2;
 
+bool stopped_225;
+bool stopped_175;
+
+#define max(a,b) (a>b?a:b)
+#define min(a,b) (a>b?b:a)
+
 void adjust_225_175()
 {
+	doLedOff(); 
+	doLedOn();
+
 	if (fabs(fM_VIN) < 10){
 		return; // low voltage at input
 	}
 	float target_175 = fM_VIN * 0.45;
 	float target_225 = fM_VIN * 0.55;
 	
-	float diff_175 = (fM_V175 - target_175) / fM_VIN;
-	float diff_225 = (fM_V225 - target_225) / fM_VIN;
+	float diff_175 = (target_175 - fM_V175) / fM_VIN;
+	float diff_225 = (target_225 -fM_V225) / fM_VIN;
+	int diff;
 	
-
 	HRTIM_CompareCfgTypeDef compareCfg;
 
 
 	// 225 Timer E1 -> PC8  C_225 -> P1 -> U1(2) -> P23(1) -> Q1 L1 Q3 D3 
-	compareCfg.CompareValue = compare_225 + diff_225 * period / 256;
+	diff = diff_225 * period / 8;
+	int sign_or_0 = (0 < diff) - (diff < 0);
+	diff =  (diff ? sign_or_0 : 0) + diff * max(compare_225,96) / 40000;
 
-	if (compareCfg.CompareValue < 70) {
-		compareCfg.CompareValue = 70;
-	}
-	if (compareCfg.CompareValue >= period - 70) {
-		compareCfg.CompareValue = period - 70;
-	}
-	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
-		HRTIM_TIMERINDEX_TIMER_E,
-		HRTIM_COMPAREUNIT_1,
-		&compareCfg);
+	compareCfg.CompareValue = min(period - 96, max(95, compare_225 - diff));
 	compare_225 = compareCfg.CompareValue; // remember previous value;
 
-		// 175 Timer C1 -> PB12 C_175  -> P2 -> U1(1) -> P24(1) -> Q2 L2 Q4 D4 
-		if (compare_175 < 100 && diff_175 >0){
-			diff_175 /=4;
+	if (compareCfg.CompareValue < 96) { // force inactive
+		stopped_225 = true;
+		HAL_HRTIM_WaveformOutputStop(&hhrtim1,
+			HRTIM_OUTPUT_TE1);
+		HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_E,
+			HRTIM_OUTPUT_TE1,
+			HRTIM_OUTPUTLEVEL_INACTIVE);
+	} else if (compareCfg.CompareValue >= period - 96) { // force active
+		stopped_225 = true;
+		HAL_HRTIM_WaveformOutputStop(&hhrtim1,
+			HRTIM_OUTPUT_TE1);
+		HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_E,
+			HRTIM_OUTPUT_TE1,
+			HRTIM_OUTPUTLEVEL_ACTIVE);
+	} else {
+		if (stopped_225){
+			HAL_HRTIM_WaveformOutputStart(&hhrtim1,
+				HRTIM_OUTPUT_TE1);
+			stopped_225 = false;
 		}
-	compareCfg.CompareValue = compare_175 - diff_175 * period / 128;
+		HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_E,
+			HRTIM_COMPAREUNIT_1,
+			&compareCfg);
+	}
+	
 
-	if (compareCfg.CompareValue < 50) {
-		compareCfg.CompareValue = 50;
+		// 175 Timer C1 -> PB12 C_175  -> P2 -> U1(1) -> P24(1) -> Q2 L2 Q4 D4 
+	diff = diff_175 * period / 8;
+	sign_or_0 = (0 < diff) - (diff < 0);
+	diff =  (diff ? sign_or_0 : 0) + diff *  max(compare_175, 96) / 40000;
+
+	compareCfg.CompareValue = min(period - 96, max(95, compare_175 + diff));
+	compare_175 = compareCfg.CompareValue;
+
+	if (compareCfg.CompareValue < 96) {
+		stopped_175 = true;
+		HAL_HRTIM_WaveformOutputStop(&hhrtim1,
+			HRTIM_OUTPUT_TC1);
+		HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_C,
+			HRTIM_OUTPUT_TC1,
+			HRTIM_OUTPUTLEVEL_INACTIVE);
+	} else if (compareCfg.CompareValue >= period - 96) {
+		stopped_175 = true;
+		HAL_HRTIM_WaveformOutputStop(&hhrtim1,
+			HRTIM_OUTPUT_TC1);
+		HAL_HRTIM_WaveformSetOutputLevel(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_C,
+			HRTIM_OUTPUT_TC1,
+			HRTIM_OUTPUTLEVEL_ACTIVE);
+	} else {
+		if (stopped_175) {
+			HAL_HRTIM_WaveformOutputStart(&hhrtim1,
+				HRTIM_OUTPUT_TC1);
+			stopped_175 = false;
+		}
+		HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
+			HRTIM_TIMERINDEX_TIMER_C,
+			HRTIM_COMPAREUNIT_1,
+			&compareCfg);
 	}
-	if (compareCfg.CompareValue >= period -50) {
-		compareCfg.CompareValue = period -50;
-	}
-	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
-		HRTIM_TIMERINDEX_TIMER_C,
-		HRTIM_COMPAREUNIT_1,
-		&compareCfg);
-	compare_175 = compareCfg.CompareValue; // remember previous value;
-	HAL_HRTIM_WaveformCompareConfig(&hhrtim1,
-		HRTIM_TIMERINDEX_TIMER_C,
-		HRTIM_COMPAREUNIT_1,
-		&compareCfg);
+	doLedOff();
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* adcHandle)
@@ -184,9 +242,21 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* adcHandle)
 		fM_IIN = g_ADCBuffer2[4] *iFactor; 
 		fM_I175 = g_ADCBuffer2[5] *iFactor; 
 		fM_I225 = g_ADCBuffer2[6] *iFactor; 
-
+		adjust_225_175();
 	}
-	adjust_225_175();
+	
+}
+
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim){
+	if (htim == &htim3) {
+		doLedOn();
+	}
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
+	if (htim == &htim3) {
+		doLedOn();
+	}
 }
 
 void doPin(GPIO_TypeDef* port, uint16_t pin)
@@ -239,6 +309,7 @@ int main(void)
   MX_CRC_Init();
   MX_TIM3_Init();
   MX_HRTIM1_Init();
+  MX_TIM2_Init();
 
   /* USER CODE BEGIN 2 */
   	//HAL_TIM_OC_Start(&htim3, TIM_CHANNEL_1);
@@ -246,8 +317,8 @@ int main(void)
 	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 	HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
 	HAL_Delay(10);
-	HAL_TIM_Base_Start(&htim3);
-	HAL_TIM_OC_Start(&htim3, TIM_CHANNEL_3);
+	HAL_TIM_OC_Start_IT(&htim3, TIM_CHANNEL_3);
+	HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_1);
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t*) g_ADCBuffer1, ADC_BUFFER1_LENGTH);
 	HAL_ADC_Start_DMA(&hadc2, (uint32_t*) g_ADCBuffer2, ADC_BUFFER2_LENGTH);
 
@@ -259,6 +330,7 @@ int main(void)
 	HAL_HRTIM_SimpleOCStart(&hhrtim1, HRTIM_TIMERINDEX_TIMER_E, HRTIM_COMPAREUNIT_1);
 	HAL_HRTIM_WaveformOutputStart(&hhrtim1, HRTIM_OUTPUT_TE1);
 
+	HAL_GPIO_WritePin(Disable_GPIO_Port, Disable_Pin, GPIO_PIN_RESET); // enable everything
   /* USER CODE END 2 */
 
   /* Infinite loop */

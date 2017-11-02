@@ -60,6 +60,8 @@
 #define M_VIN_GPIO_Port GPIOA
 #define M_V225_Pin GPIO_PIN_1
 #define M_V225_GPIO_Port GPIOA
+#define Sync_Pin GPIO_PIN_4
+#define Sync_GPIO_Port GPIOA
 #define Led_Pin GPIO_PIN_5
 #define Led_GPIO_Port GPIOA
 #define M_V175_Pin GPIO_PIN_6
